@@ -31,6 +31,9 @@ DEFAULT_PROCESS_LOG_FMT = """
 DEFAULT_TASK_LOG_FMT = """[%(asctime)s: %(levelname)s/%(processName)s] \
 %(task_name)s[%(task_id)s]: %(message)s"""
 
+DEFAULT_SECURITY_DIGEST = 'sha256'
+
+
 OLD_NS = {'celery_{0}'}
 OLD_NS_BEAT = {'celerybeat_{0}'}
 OLD_NS_WORKER = {'celeryd_{0}'}
@@ -77,6 +80,7 @@ class Option(object):
 
 NAMESPACES = Namespace(
     accept_content=Option(DEFAULT_ACCEPT_CONTENT, type='list', old=OLD_NS),
+    result_accept_content=Option(None, type='list'),
     enable_utc=Option(True, type='bool'),
     imports=Option((), type='tuple', old=OLD_NS),
     include=Option((), type='tuple', old=OLD_NS),
@@ -129,6 +133,14 @@ NAMESPACES = Namespace(
         auth_provider=Option(type='string'),
         auth_kwargs=Option(type='string'),
         options=Option({}, type='dict'),
+    ),
+    s3=Namespace(
+        access_key_id=Option(type='string'),
+        secret_access_key=Option(type='string'),
+        bucket=Option(type='string'),
+        base_path=Option(type='string'),
+        endpoint_url=Option(type='string'),
+        region=Option(type='string'),
     ),
     azureblockblob=Namespace(
         container_name=Option('celery', type='string'),
@@ -217,6 +229,7 @@ NAMESPACES = Namespace(
         certificate=Option(type='string'),
         cert_store=Option(type='string'),
         key=Option(type='string'),
+        digest=Option(DEFAULT_SECURITY_DIGEST, type='string'),
     ),
     database=Namespace(
         url=Option(old={'celery_result_dburi'}),

@@ -12,7 +12,6 @@ import datetime
 import sys
 import time
 from collections import namedtuple
-from datetime import timedelta
 from functools import partial
 from weakref import WeakValueDictionary
 
@@ -120,8 +119,12 @@ class Backend(object):
         self._cache = _nulldict() if cmax == -1 else LRUCache(limit=cmax)
 
         self.expires = self.prepare_expires(expires, expires_type)
-        self.accept = prepare_accept_content(
-            conf.accept_content if accept is None else accept)
+
+        # precedence: accept, conf.result_accept_content, conf.accept_content
+        self.accept = conf.result_accept_content if accept is None else accept
+        self.accept = conf.accept_content if self.accept is None else self.accept  # noqa: E501
+        self.accept = prepare_accept_content(self.accept)
+
         self._pending_results = pending_results_t({}, WeakValueDictionary())
         self._pending_messages = BufferMap(MESSAGE_BUFFER_MAX)
         self.url = url
@@ -166,10 +169,17 @@ class Backend(object):
         for errback in request.errbacks:
             errback = self.app.signature(errback)
             if (
-                # workaround to support tasks with bind=True executed as
-                # link errors. Otherwise retries can't be used
-                not isinstance(errback.type.__header__, partial) and
-                arity_greater(errback.type.__header__, 1)
+                    # Celery tasks type created with the @task decorator have
+                    # the __header__ property, but Celery task created from
+                    # Task class do not have this property.
+                    # That's why we have to check if this property exists
+                    # before checking is it partial function.
+                    hasattr(errback.type, '__header__') and
+
+                    # workaround to support tasks with bind=True executed as
+                    # link errors. Otherwise retries can't be used
+                    not isinstance(errback.type.__header__, partial) and
+                    arity_greater(errback.type.__header__, 1)
             ):
                 errback(request, exc, traceback)
             else:
@@ -225,9 +235,9 @@ class Backend(object):
         type_, real_exc, tb = sys.exc_info()
         try:
             exc = real_exc if exc is None else exc
-            ei = ExceptionInfo((type_, exc, tb))
-            self.mark_as_failure(task_id, exc, ei.traceback)
-            return ei
+            exception_info = ExceptionInfo((type_, exc, tb))
+            self.mark_as_failure(task_id, exc, exception_info.traceback)
+            return exception_info
         finally:
             del tb
 
@@ -293,7 +303,7 @@ class Backend(object):
     def prepare_expires(self, value, type=None):
         if value is None:
             value = self.app.conf.result_expires
-        if isinstance(value, timedelta):
+        if isinstance(value, datetime.timedelta):
             value = value.total_seconds()
         if value is not None and type:
             return type(value)
@@ -302,14 +312,13 @@ class Backend(object):
     def prepare_persistent(self, enabled=None):
         if enabled is not None:
             return enabled
-        p = self.app.conf.result_persistent
-        return self.persistent if p is None else p
+        persistent = self.app.conf.result_persistent
+        return self.persistent if persistent is None else persistent
 
     def encode_result(self, result, state):
         if state in self.EXCEPTION_STATES and isinstance(result, Exception):
             return self.prepare_exception(result)
-        else:
-            return self.prepare_value(result)
+        return self.prepare_value(result)
 
     def is_cached(self, task_id):
         return task_id in self._cache
@@ -593,11 +602,11 @@ class BaseKeyValueStoreBackend(Backend):
         return bytes_to_str(key)
 
     def _filter_ready(self, values, READY_STATES=states.READY_STATES):
-        for k, v in values:
-            if v is not None:
-                v = self.decode_result(v)
-                if v['status'] in READY_STATES:
-                    yield k, v
+        for k, value in values:
+            if value is not None:
+                value = self.decode_result(value)
+                if value['status'] in READY_STATES:
+                    yield k, value
 
     def _mget_to_results(self, values, keys):
         if hasattr(values, 'items'):
@@ -673,6 +682,8 @@ class BaseKeyValueStoreBackend(Backend):
 
         if request and getattr(request, 'group', None):
             meta['group_id'] = request.group
+        if request and getattr(request, 'parent_id', None):
+            meta['parent_id'] = request.parent_id
 
         if self.app.conf.find_value_for_key('extended', 'result'):
             if request:
